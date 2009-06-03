@@ -9,25 +9,6 @@ setp parport.0.reset-time 100000
 loadrt stepgen step_type=0,0,0,0
 loadrt charge_pump
 
-# Raster mask support - stream in laser on/off commands behind AXIS's back
-# Input stream format: reset beam xop xarg
-#   reset:  0=mask command 1=reset (begin mask sequence with "1 0 0 0", every other command starts with 0)
-#   beam:   0=off 1=on
-#   xop:    X axis comparison operation 0=less-or-equal 1=greater
-#   xarg:   X axis comparison operand
-
-loadrt streamer depth=256 cfg="bbbf"
-net mask-reset     <= streamer.0.pin.0
-net mask-beam      <= streamer.0.pin.1
-net mask-xop       <= streamer.0.pin.2
-net mask-xarg      <= streamer.0.pin.3
-net mask-empty     <= streamer.0.empty
-net mask-latch => streamer.0.enable
-
-# actual X axis position according to motion planner
-net motion-xpos-fb <= axis.0.join-pos-fb
-
-net laser_mask
 
 # coarse laser control, wired to spindle on/off (M3/M5), not realtime
 newsig laser_enable bit
@@ -45,20 +26,21 @@ setp comp.0.in1 0
 net discrete_z <= comp.0.out
 
 # laser power wired to spindle speed (S-)
-newsig laser_power float
-net laser_power <= motion.spindle-speed-out
+#newsig laser_power float
+#net laser_power <= motion.spindle-speed-out
 
 # use pwm to control laser power
-newsig laser_final bit
-newsig laser_pulse bit
-loadrt pwmgen output_type=0
-setp pwmgen.0.scale 1
-setp pwmgen.0.offset 0
-setp pwmgen.0.pwm-freq 100
-net laser_final => pwmgen.0.enable
-net laser_power => pwmgen.0.value
-net laser_pulse <= pwmgen.0.pwm
-net laser_pulse => parport.0.pin-01-out
+# disabled because it works like shit (pwm is too slow to make a smooth burn)
+#newsig laser_final bit
+#newsig laser_pulse bit
+#loadrt pwmgen output_type=0
+#setp pwmgen.0.scale 1
+#setp pwmgen.0.offset 0
+#setp pwmgen.0.pwm-freq 100
+#net laser_final => pwmgen.0.enable
+#net laser_power => pwmgen.0.value
+#net laser_pulse <= pwmgen.0.pwm
+#net laser_pulse => parport.0.pin-01-out
 
 # laser logic: laser_enable & (laser_gate | discrete_z) 
 loadrt logic count=2 personality=514,258    # or/2, and/2 (this is a travesty of programming)
@@ -70,6 +52,9 @@ net laser_inter1 => logic.1.in-00
 net laser_enable => logic.1.in-01
 net laser_final  <= logic.1.and
 
+# connect laser_final to hardware
+net laser_final => parport.0.pin-01-out
+
 # make Z and W axes always homed
 #setp axis.2.homed 1   # Z
 #setp axis.8.homed 1   # W
@@ -78,7 +63,7 @@ addf parport.0.read base-thread
 addf stepgen.make-pulses base-thread
 addf logic.0 base-thread
 addf logic.1 base-thread
-addf pwmgen.make-pulses base-thread
+#addf pwmgen.make-pulses base-thread
 addf parport.0.write base-thread
 addf parport.0.reset base-thread
 addf charge-pump base-thread
@@ -87,7 +72,7 @@ addf stepgen.capture-position servo-thread
 addf motion-command-handler servo-thread
 addf motion-controller servo-thread
 addf stepgen.update-freq servo-thread
-addf pwmgen.update servo-thread
+#addf pwmgen.update servo-thread
 addf comp.0 servo-thread
 
 net xdir => parport.0.pin-02-out
