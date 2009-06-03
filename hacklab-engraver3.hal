@@ -9,6 +9,25 @@ setp parport.0.reset-time 100000
 loadrt stepgen step_type=0,0,0,0
 loadrt charge_pump
 
+# Raster mask support - stream in laser on/off commands behind AXIS's back
+# Input stream format: reset beam xop xarg
+#   reset:  0=mask command 1=reset (begin mask sequence with "1 0 0 0", every other command starts with 0)
+#   beam:   0=off 1=on
+#   xop:    X axis comparison operation 0=less-or-equal 1=greater
+#   xarg:   X axis comparison operand
+
+loadrt streamer depth=256 cfg="bbbf"
+net mask-reset     <= streamer.0.pin.0
+net mask-beam      <= streamer.0.pin.1
+net mask-xop       <= streamer.0.pin.2
+net mask-xarg      <= streamer.0.pin.3
+net mask-empty     <= streamer.0.empty
+net mask-latch => streamer.0.enable
+
+# actual X axis position according to motion planner
+net motion-xpos-fb <= axis.0.join-pos-fb
+
+net laser_mask
 
 # coarse laser control, wired to spindle on/off (M3/M5), not realtime
 newsig laser_enable bit
