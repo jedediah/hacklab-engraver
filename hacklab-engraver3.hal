@@ -9,6 +9,29 @@ setp parport.0.reset-time 100000
 loadrt stepgen step_type=0,0,0,0
 loadrt charge_pump
 
+
+# Boring components that emc makes me load explicitly because it is a cunt
+loadrt comp names=comp-mask-lte,comp-discrete-z
+loadrt not names=not-mask-ffw,not-mask-not-empty
+loadrt xor2 names=xor2-mask-test
+loadrt and2 names=and2-mask-forward,and2-laser-mask,and2-laser-final
+loadrt or2 names=or2-mask-command-done,or2-mask-not-ffw,or2-mask-read,or2-laser-gcode,or2-laser-fine
+
+
+# Fast thread for generating signals
+addf parport.0.read base-thread
+addf stepgen.make-pulses base-thread
+addf parport.0.write base-thread
+addf parport.0.reset base-thread
+addf charge-pump base-thread
+
+# Slow thread for logic (more logic components are added further down)
+addf stepgen.capture-position     servo-thread
+addf motion-command-handler       servo-thread
+addf motion-controller            servo-thread
+addf stepgen.update-freq          servo-thread
+
+
 ###################################################################################
 # Raster Mask - stream in laser on/off commands behind AXIS's back
 # Input stream format: reset beam xop xarg
@@ -26,47 +49,59 @@ net mask-empty     <= streamer.0.empty
 net mask-read => streamer.0.enable
 
 # hardware reported X axis position
-net motion-xpos-fb <= axis.0.join-pos-fb
+net motion-xpos-fb <= axis.0.joint-pos-fb
 
 # mask-lte <= motion-xpos-fb < mask-xarg
-net motion-xpos-fb => comp.mask-lte.in0
-net mask-xarg => comp.mask-lte.in1
-net mask-lte <= comp.mask-lte.out
+addf comp-mask-lte servo-thread
+net motion-xpos-fb => comp-mask-lte.in0
+net mask-xarg => comp-mask-lte.in1
+net mask-lte <= comp-mask-lte.out
 
-# mask-test <= !(mask-xop ^ mask-lte)
-mask-xop => xor2.mask-not-test.in0
-mask-lte => xor2.mask-not-test.in1
-mask-not-test <= xor2.mask-not-test.out
+# mask-test <= mask-xop ^ mask-lte
+addf xor2-mask-test servo-thread
+net mask-xop => xor2-mask-test.in0
+net mask-lte => xor2-mask-test.in1
+net mask-test <= xor2-mask-test.out
 
-mask-not-test => not.mask-test.in
-mask-test <= not.mask-test.out
+# if job is running, read only if test is true or reset
+# if job is not running, read until reset
+# mask-read <= (laser-coarse && (mask-test || mask-reset)) || !(laser-coarse || mask-reset)
 
-# if job is running, read only when test is true
-# if job is not running, read until reset is found
-# mask-read <= (laser-coarse && mask-test) || !(laser-coarse || mask-reset)
+addf or2-mask-command-done servo-thread
+net mask-test => or2-mask-command-done.in0
+net mask-reset => or2-mask-command-done.in1
+net mask-command-done <= or2-mask-command-done.out
 
-net laser-coarse => and2.mask-next-command.in0
-net mask-test => and2.mask-next-command.in1
-net mask-next-command <= and2.mask-next-command.out
+addf and2-mask-forward servo-thread
+net laser-coarse => and2-mask-forward.in0
+net mask-command-done => and2-mask-forward.in1
+net mask-forward <= and2-mask-forward.out
 
-net laser-coarse => or2.mask-not-ffw.in0
-net mask-reset => or2.mask-not-ffw.in1
-net mask-not-ffw <= or2.mask-not-ffw.out
+addf or2-mask-not-ffw servo-thread
+net laser-coarse => or2-mask-not-ffw.in0
+net mask-reset => or2-mask-not-ffw.in1
+net mask-not-ffw <= or2-mask-not-ffw.out
 
-net mask-not-ffw => not.mask-ffw.in
-net mask-ffw <= not.mask-ffw.out
+addf not-mask-ffw servo-thread
+net mask-not-ffw => not-mask-ffw.in
+net mask-ffw <= not-mask-ffw.out
 
-net mask-next-command => or2.mask-read.in0
-net mask-ffw => or2.mask-read.in1
-net mask-read <= or2.mask-read.out
+addf or2-mask-read servo-thread
+net mask-forward => or2-mask-read.in0
+net mask-ffw => or2-mask-read.in1
+net mask-read <= or2-mask-read.out
 
 # laser-mask <=  mask-not-empty && mask-beam
-net mask-empty => not.mask-not-empty.in
-net mask-not-empty <= not.mask-not-empty.out
+addf not-mask-not-empty servo-thread
+net mask-empty => not-mask-not-empty.in
+net mask-not-empty <= not-mask-not-empty.out
 
-net mask-beam => and2.laser-mask.in0
-net mask-not-empty >= and2.laser-mask.in1
-net laser-mask <= and2.laser-mask.out
+addf and2-laser-mask servo-thread
+net mask-beam => and2-laser-mask.in0
+net mask-not-empty => and2-laser-mask.in1
+net laser-mask <= and2-laser-mask.out
+
+addf streamer.0 servo-thread
 
 # Raster Mask - end
 #######################################################################
@@ -75,46 +110,29 @@ net laser-mask <= and2.laser-mask.out
 net laser-coarse <= motion.spindle-on
 
 # fine laser control, wired to digital output 0 (M62 P0/M63 P0), realtime
-newsig laser-gate bit
 net laser-gate <= motion.digital-out-00
 
 # legacy laser control, wired to Z < 0, can be used instead of M62/M63
-newsig discrete-z bit
-loadrt comp count=1
-net zpos-cmd => comp.0.in0
-setp comp.0.in1 0
-net discrete-z <= comp.0.out
-
-# laser power wired to spindle speed (S-)
-#newsig laser_power float
-#net laser_power <= motion.spindle-speed-out
-
-# use pwm to control laser power
-# disabled because it works like shit (pwm is too slow to make a smooth burn)
-#newsig laser-final bit
-#newsig laser_pulse bit
-#loadrt pwmgen output_type=0
-#setp pwmgen.0.scale 1
-#setp pwmgen.0.offset 0
-#setp pwmgen.0.pwm-freq 100
-#net laser-final => pwmgen.0.enable
-#net laser_power => pwmgen.0.value
-#net laser_pulse <= pwmgen.0.pwm
-#net laser_pulse => parport.0.pin-01-out
+addf comp-discrete-z servo-thread
+net zpos-cmd => comp-discrete-z.in0
+setp comp-discrete-z.in1 0
+net discrete-z <= comp-discrete-z.out
 
 # laser-final <= laser-coarse & (laser-gate | discrete-z | laser-mask)
+addf or2-laser-gcode servo-thread
+net laser-gate => or2-laser-gcode.in0
+net discrete-z => or2-laser-gcode.in1
+net laser-gcode <= or2-laser-gcode.out
 
-net laser-gate => or2.laser-gcode.in0
-net discrete-z => or2.laser-gcode.in1
-net laser-gcode <= or2.laser-gcode.out
+addf or2-laser-fine servo-thread
+net laser-gcode => or2-laser-fine.in0
+net laser-mask => or2-laser-fine.in1
+net laser-fine <= or2-laser-fine.out
 
-net laser-gcode => or2.laser-fine.in0
-net laser-mask => or2.laser-fine.in0
-net laser-fine <= or2.laser-fine.out
-
-net laser-fine => and2.laser-final.in0
-net laser-coarse => and2.laser-final.in1
-net laser-final <= and2.laser-final-out
+addf and2-laser-final servo-thread
+net laser-fine => and2-laser-final.in0
+net laser-coarse => and2-laser-final.in1
+net laser-final <= and2-laser-final.out
 
 # laser-final => hardware
 net laser-final => parport.0.pin-01-out
@@ -122,22 +140,6 @@ net laser-final => parport.0.pin-01-out
 # make Z and W axes always homed
 #setp axis.2.homed 1   # Z
 #setp axis.8.homed 1   # W
-
-addf parport.0.read base-thread
-addf stepgen.make-pulses base-thread
-addf logic.0 base-thread
-addf logic.1 base-thread
-#addf pwmgen.make-pulses base-thread
-addf parport.0.write base-thread
-addf parport.0.reset base-thread
-addf charge-pump base-thread
-
-addf stepgen.capture-position servo-thread
-addf motion-command-handler servo-thread
-addf motion-controller servo-thread
-addf stepgen.update-freq servo-thread
-#addf pwmgen.update servo-thread
-addf comp.0 servo-thread
 
 net xdir => parport.0.pin-02-out
 net xstep => parport.0.pin-03-out
