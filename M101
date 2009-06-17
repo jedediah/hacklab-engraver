@@ -1,0 +1,32 @@
+#!/usr/bin/python
+
+# === Graster Streaming Script ===
+#
+# This script is invoked by g-code M101 at the
+# beginning of every graster job. It figures out
+# the name of the mask file and forks a process
+# to stream it to the HAL while AXIS executes the
+# motion code.
+#
+# This file must be symlinked to the ~/emc2/nc_files dir
+
+import emc, os
+os.chdir("/home/hacklab/emc2/configs/hacklab-engraver3")
+ini = emc.ini("hacklab-engraver3.ini")
+emc.nmlfile = ini.find("EMC","NML_FILE")
+s = emc.stat()
+s.poll()
+ngc = s.file
+(base,ext) = os.path.splitext(ngc)
+gmask = base+".gmask"
+if not os.path.exists(gmask):
+  gmask = ngc+".gmask"
+  if not os.path.exists(gmask):
+    raise "could not find a matching .gmask file for " + ngc
+
+pid = os.fork()
+if not pid:
+  print "streaming mask file " + gmask
+  os.system("cat "+gmask+" | halstreamer")
+  print "done!"
+
