@@ -10,7 +10,8 @@
 #
 # This file must be symlinked to the ~/emc2/nc_files dir
 
-import emc, os
+import emc, os, sys, threading, gtk, time, popen2, signal, select
+
 os.chdir("/home/hacklab/emc2/configs/hacklab-engraver3")
 ini = emc.ini("hacklab-engraver3.ini")
 emc.nmlfile = ini.find("EMC","NML_FILE")
@@ -22,11 +23,63 @@ gmask = base+".gmask"
 if not os.path.exists(gmask):
   gmask = ngc+".gmask"
   if not os.path.exists(gmask):
-    raise "could not find a matching .gmask file for " + ngc
+    os.system('zenity --error --text "Mask file \''+base+'.gmask\' not found. Laser disabled for this job."')
+    sys.exit(os.EX_NOINPUT)
 
+
+def make_pbar():
+  (path,fn) = os.path.split(gmask)
+  message = "Streaming '"+fn+"'\n\n" + \
+            "This dialog should complete and close itself some time before\n" + \
+            "your job is done. If you stop the job, wait for this dialog\n" + \
+            "to go away before starting another one. If it won't go away,\n" + \
+            "click 'Cancel' and kill any processes containing 'M101'.\n"
+  return popen2.Popen3('zenity --progress --auto-close --auto-kill --title "Graster Streamer" --text "'+message+'"')
+
+pbar = make_pbar()
+
+total_lines = 0
+fd = open(gmask,'r')
+for x in fd.readlines():
+  total_lines += 1
+fd.close()
+
+total_lines = float(total_lines)
+count = 0
+
+print "Streaming '"+gmask+"'..."
+time.sleep(1)
 pid = os.fork()
-if not pid:
-  print "streaming mask file " + gmask
-  os.system("cat "+gmask+" | halstreamer")
-  print "done!"
+
+if pid:
+  sys.exit(os.EX_OK)
+else:
+  os.setsid()
+  fin = open(gmask,'r')
+  fout = os.popen('halstreamer','w')
+  try:
+    for line in fin.readlines():
+      r,w,e = select.select((),(fout,),(fout,),0.1)
+      if pbar.poll() != -1: raise
+
+      if len(w) > 0:
+        fout.write(line)
+        count += 1
+      elif len(e) > 0:
+        os.system("zenity --error --text 'Error writing to halstreamer. Job may not finish.'")
+        raise
+
+      pbar.tochild.write(str(int(100.0*count/total_lines))+"\n")
+ 
+  finally:
+    print "...cleaning up..."
+    #fin.close()
+    #fout.close()
+    pbar.tochild.close()
+    pbar.fromchild.close()
+    #os.kill(pbar.pid,signal.SIGINT)
+    #os.kill(pbar.pid,signal.SIGKILL)
+    print "...done!"
+    os._exit(os.EX_OK)
+    #sys.exit(os.EX_OK)
 
