@@ -1,3 +1,5 @@
 /junk
 .scope.cfg
 autosave.halscope
+emc.var
+emc.var.bak
