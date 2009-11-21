@@ -48,10 +48,10 @@ total_lines = float(total_lines)
 count = 0
 
 print "Streaming '"+gmask+"'..."
-time.sleep(1)
 pid = os.fork()
 
 if pid:
+  time.sleep(2)
   sys.exit(os.EX_OK)
 else:
   os.setsid()
@@ -59,15 +59,15 @@ else:
   fout = os.popen('halstreamer','w')
   try:
     for line in fin.readlines():
-      r,w,e = select.select((),(fout,),(fout,),0.1)
+      #r,w,e = select.select((),(fout,),(fout,),0.1)
       if pbar.poll() != -1: raise
 
-      if len(w) > 0:
-        fout.write(line)
-        count += 1
-      elif len(e) > 0:
-        os.system("zenity --error --text 'Error writing to halstreamer. Job may not finish.'")
-        raise
+      #if len(w) > 0:
+      fout.write(line)
+      count += 1
+      #elif len(e) > 0:
+      #  os.system("zenity --error --text 'Error writing to halstreamer. Job may not finish.'")
+      #  raise
 
       pbar.tochild.write(str(int(100.0*count/total_lines))+"\n")
  
